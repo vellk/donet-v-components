@@ -17,11 +17,11 @@ public class WhatsappFlowEncryptor
     {
         try
         {
-            PemReader pemReader = new PemReader(new StringReader(privatePem), new PasswordFinder(passphrase));
-            AsymmetricCipherKeyPair keyPair = (AsymmetricCipherKeyPair)pemReader.ReadObject();
-            RsaPrivateCrtKeyParameters rsaParams = (RsaPrivateCrtKeyParameters)keyPair.Private;
-            RSAParameters rsaParameters = DotNetUtilities.ToRSAParameters(rsaParams);
-            RSA rsa = RSA.Create();
+            var pemReader = new PemReader(new StringReader(privatePem), new PasswordFinder(passphrase));
+            var keyPair = (AsymmetricCipherKeyPair)pemReader.ReadObject();
+            var rsaParams = (RsaPrivateCrtKeyParameters)keyPair.Private;
+            var rsaParameters = DotNetUtilities.ToRSAParameters(rsaParams);
+            var rsa = RSA.Create();
             rsa.ImportParameters(rsaParameters);
             return rsa;
         }
@@ -32,7 +32,7 @@ public class WhatsappFlowEncryptor
     }
 
     public static (string decryptedData, byte[] aesKeyBuffer, byte[] initialVectorBuffer) Decrypt(
-        byte[] aesKey, byte[] flowDataBuffer, byte[] initialVectorBuffer, RSA privateKey)
+        byte[] aesKey, byte[] dataBuffer, byte[] initialVectorBuffer, RSA privateKey)
     {
         byte[] decryptedAesKey;
         try
@@ -45,24 +45,24 @@ public class WhatsappFlowEncryptor
                 "Failed to decrypt aes key from the request. Please verify your private key.");
         }
 
-        if (initialVectorBuffer.Length != 16)
+        if (initialVectorBuffer.Length != TagLength)
         {
             throw new CryptographyException(
-                "Invalid initial vector size. The nonce must be 16 bytes.");
+                $"Invalid initial vector size. The nonce must be {TagLength} bytes.");
         }
 
-        if (flowDataBuffer.Length < TagLength)
+        if (dataBuffer.Length < TagLength)
         {
             throw new CryptographyException(
                 "Invalid encrypted data length. The data is too short to contain a valid tag.");
         }
 
         // Split encrypted flow data into body and tag
-        byte[] encryptedFlowDataBody = flowDataBuffer[..^TagLength];
-        byte[] encryptedFlowDataTag = flowDataBuffer[^TagLength..];
+        byte[] encryptedFlowDataBody = dataBuffer[..^TagLength];
+        byte[] encryptedFlowDataTag = dataBuffer[^TagLength..];
 
-        GcmBlockCipher gcmCipher = new GcmBlockCipher(new AesEngine());
-        AeadParameters parameters =
+        var gcmCipher = new GcmBlockCipher(new AesEngine());
+        var parameters =
             new AeadParameters(new KeyParameter(decryptedAesKey), 128, initialVectorBuffer, null);
         gcmCipher.Init(false, parameters);
 
@@ -71,8 +71,9 @@ public class WhatsappFlowEncryptor
         try
         {
             int len = gcmCipher.ProcessBytes(encryptedFlowDataBody, 0, encryptedFlowDataBody.Length, decryptedData, 0);
-            gcmCipher.ProcessBytes(encryptedFlowDataTag, 0, encryptedFlowDataTag.Length, decryptedData, len);
+            len += gcmCipher.ProcessBytes(encryptedFlowDataTag, 0, encryptedFlowDataTag.Length, decryptedData, len);
             len += gcmCipher.DoFinal(decryptedData, len);
+
             Array.Resize(ref decryptedData, len);
         }
         catch (Exception)
@@ -81,25 +82,25 @@ public class WhatsappFlowEncryptor
                 "Decryption failed for the flow data. Please verify the input data and keys.");
         }
 
-        string decryptedJsonString = Encoding.UTF8.GetString(decryptedData).TrimEnd('\0');
-        return (decryptedJsonString, decryptedAesKey, initialVectorBuffer);
+        string decryptedString = Encoding.UTF8.GetString(decryptedData).TrimEnd('\0');
+        return (decryptedString, decryptedAesKey, initialVectorBuffer);
     }
 
     public static string Encrypt(string responseData, byte[] aesKeyBuffer, byte[] initialVectorBuffer)
     {
         // Flip the initial vector
-        byte[] flippedIv = new byte[initialVectorBuffer.Length];
+        byte[] flippedIV = new byte[initialVectorBuffer.Length];
         for (int i = 0; i < initialVectorBuffer.Length; i++)
         {
-            flippedIv[i] = (byte)~initialVectorBuffer[i];
+            flippedIV[i] = (byte)~initialVectorBuffer[i];
         }
 
         byte[] plainText = Encoding.UTF8.GetBytes(responseData);
 
         // Set up AES-GCM encryption
-        AesEngine aesEngine = new AesEngine();
-        GcmBlockCipher gcmBlockCipher = new GcmBlockCipher(aesEngine);
-        AeadParameters parameters = new AeadParameters(new KeyParameter(aesKeyBuffer), 128, flippedIv);
+        var aesEngine = new AesEngine();
+        var gcmBlockCipher = new GcmBlockCipher(aesEngine);
+        var parameters = new AeadParameters(new KeyParameter(aesKeyBuffer), 128, flippedIV);
         gcmBlockCipher.Init(true, parameters);
 
         // Encrypt the plaintext
